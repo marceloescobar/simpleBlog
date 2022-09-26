@@ -1,0 +1,95 @@
+def SPRING_VERSION = "X.X.X"
+
+pipeline {
+    agent {
+        node {
+            label 'spring'
+        }
+    }
+
+    tools {
+        jdk 'OpenJDK 16'
+    }
+
+    stages {
+        stage('Clean') {
+            steps {
+                echo 'Cleaning leftovers from previous builds'
+                sh "chmod +x -R ${env.WORKSPACE}"
+                sh './gradlew clean'
+            }
+        }
+
+        stage('Compile') {
+            steps {
+                echo 'COMPILING JAVA'
+                sh './gradlew assemble'
+            }
+        }
+
+        stage('Static Code Analysis') {
+            steps {
+                echo 'Running Static Code Analysis'
+
+                echo 'Checking style'
+                sh './gradlew checkstyleMain'
+
+                echo 'Checking duplicated code'
+                sh './gradlew cpdCheck'
+
+                echo 'Checking bugs'
+                sh './gradlew spotbugsMain'
+
+                echo 'Checking code standard'
+                sh './gradlew pmdMain'
+            }
+        }
+
+        stage('Unit Test') {
+            steps {
+                echo 'Running all unit tests'
+                sh './gradlew test -Dspring.profiles.active=test'
+            }
+        }
+
+        /* stage('Coverage Test') {
+            steps {
+                echo 'Coverage Test'
+            }
+        } */
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo 'Building Docker Image'
+
+                    // Getting project version
+                    SPRING_VERSION = sh(
+                            script: './gradlew -q printVersion',
+                            returnStdout: true).trim()
+
+                    echo "CURRENT VERSION: ${SPRING_VERSION}"
+                    sh "docker build -t spring-api:${SPRING_VERSION} ."
+                }
+            }
+        }
+
+        stage('Publish Docker Image') {
+            steps {
+                script {
+                    echo 'Publish Docker Image to Docker Hub'
+
+                    withCredentials([usernamePassword(credentialsId: 'DOCKER_HUB', usernameVariable: 'DOCKER_HUB_USER', passwordVariable: 'DOCKER_HUB_TOKEN')]) {
+                        sh """
+                            docker login -u $DOCKER_HUB_USER -p $DOCKER_HUB_TOKEN
+                            docker image tag spring-api:${SPRING_VERSION} spring/spring-api:${SPRING_VERSION}
+                            docker image tag spring-api:${SPRING_VERSION} spring/spring-api:latest
+                            docker push spring/spring-api:${SPRING_VERSION}
+                            docker push spring/spring-api:latest
+                        """
+                    }
+                }
+            }
+        }
+    }
+}
